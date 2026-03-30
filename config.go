@@ -3,6 +3,7 @@ package nameparser
 import (
 	"regexp"
 	"strings"
+	"sync"
 )
 
 const DefaultEncoding = "UTF-8"
@@ -23,12 +24,13 @@ var (
 )
 
 type StringSet struct {
+	mu       sync.RWMutex
 	values   map[string]struct{}
 	onChange func()
 }
 
 func NewStringSet(items []string) *StringSet {
-	s := &StringSet{values: map[string]struct{}{}}
+	s := &StringSet{values: make(map[string]struct{}, len(items))}
 	for _, item := range items {
 		s.values[lc(item)] = struct{}{}
 	}
@@ -36,38 +38,57 @@ func NewStringSet(items []string) *StringSet {
 }
 
 func (s *StringSet) WithOnChange(fn func()) *StringSet {
+	s.mu.Lock()
 	s.onChange = fn
+	s.mu.Unlock()
 	return s
 }
 
 func (s *StringSet) Clone() *StringSet {
-	out := &StringSet{values: map[string]struct{}{}}
+	s.mu.RLock()
+	out := &StringSet{values: make(map[string]struct{}, len(s.values))}
 	for item := range s.values {
 		out.values[item] = struct{}{}
 	}
+	s.mu.RUnlock()
 	return out
 }
 
 func (s *StringSet) Add(items ...string) *StringSet {
+	changed := false
+	s.mu.Lock()
 	for _, item := range items {
 		n := lc(item)
 		if n == "" {
 			continue
 		}
+		if _, ok := s.values[n]; !ok {
+			changed = true
+		}
 		s.values[n] = struct{}{}
 	}
-	if s.onChange != nil {
-		s.onChange()
+	onChange := s.onChange
+	s.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
 	}
 	return s
 }
 
 func (s *StringSet) Remove(items ...string) *StringSet {
+	changed := false
+	s.mu.Lock()
 	for _, item := range items {
-		delete(s.values, lc(item))
+		n := lc(item)
+		if _, ok := s.values[n]; ok {
+			delete(s.values, n)
+			changed = true
+		}
 	}
-	if s.onChange != nil {
-		s.onChange()
+	onChange := s.onChange
+	s.mu.Unlock()
+	if changed && onChange != nil {
+		onChange()
 	}
 	return s
 }
@@ -82,19 +103,26 @@ func (s *StringSet) AddWithEncoding(input []byte, encoding string) error {
 }
 
 func (s *StringSet) Contains(item string) bool {
+	s.mu.RLock()
 	_, ok := s.values[lc(item)]
+	s.mu.RUnlock()
 	return ok
 }
 
 func (s *StringSet) Len() int {
-	return len(s.values)
+	s.mu.RLock()
+	n := len(s.values)
+	s.mu.RUnlock()
+	return n
 }
 
 func (s *StringSet) Values() []string {
+	s.mu.RLock()
 	out := make([]string, 0, len(s.values))
 	for item := range s.values {
 		out = append(out, item)
 	}
+	s.mu.RUnlock()
 	return out
 }
 
@@ -151,6 +179,7 @@ type Constants struct {
 	CapitalizeName               bool
 	ForceMixedCaseCapitalization bool
 
+	mu                     sync.RWMutex
 	suffixesPrefixesTitles *StringSet
 }
 
@@ -176,7 +205,7 @@ func NewConstants() *Constants {
 		c.CapitalizationExceptions[k] = v
 	}
 
-	invalidate := func() { c.suffixesPrefixesTitles = nil }
+	invalidate := c.invalidateSuffixesPrefixesTitles
 	c.Prefixes.WithOnChange(invalidate)
 	c.SuffixAcronyms.WithOnChange(invalidate)
 	c.SuffixNotAcronyms.WithOnChange(invalidate)
@@ -204,7 +233,7 @@ func (c *Constants) Clone() *Constants {
 	for k, v := range c.CapitalizationExceptions {
 		out.CapitalizationExceptions[k] = v
 	}
-	invalidate := func() { out.suffixesPrefixesTitles = nil }
+	invalidate := out.invalidateSuffixesPrefixesTitles
 	out.Prefixes.WithOnChange(invalidate)
 	out.SuffixAcronyms.WithOnChange(invalidate)
 	out.SuffixNotAcronyms.WithOnChange(invalidate)
@@ -212,17 +241,33 @@ func (c *Constants) Clone() *Constants {
 	return out
 }
 
+func (c *Constants) invalidateSuffixesPrefixesTitles() {
+	c.mu.Lock()
+	c.suffixesPrefixesTitles = nil
+	c.mu.Unlock()
+}
+
 func (c *Constants) SuffixesPrefixesTitles() *StringSet {
-	if c.suffixesPrefixesTitles != nil {
-		return c.suffixesPrefixesTitles
+	c.mu.RLock()
+	cached := c.suffixesPrefixesTitles
+	c.mu.RUnlock()
+	if cached != nil {
+		return cached
 	}
+
 	all := NewStringSet(nil)
 	all.Add(c.Prefixes.Values()...)
 	all.Add(c.SuffixAcronyms.Values()...)
 	all.Add(c.SuffixNotAcronyms.Values()...)
 	all.Add(c.Titles.Values()...)
-	c.suffixesPrefixesTitles = all
-	return c.suffixesPrefixesTitles
+
+	c.mu.Lock()
+	if c.suffixesPrefixesTitles == nil {
+		c.suffixesPrefixesTitles = all
+	}
+	cached = c.suffixesPrefixesTitles
+	c.mu.Unlock()
+	return cached
 }
 
 func (c *Constants) SetRegex(name string, re *regexp.Regexp) {

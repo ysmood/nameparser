@@ -40,6 +40,10 @@ type HumanName struct {
 	lastList     []string
 	suffixList   []string
 	nicknameList []string
+
+	inferredTitles      map[string]struct{}
+	inferredConjunction map[string]struct{}
+	inferredSuffixes    map[string]struct{}
 }
 
 func New(fullName string) *HumanName {
@@ -209,11 +213,33 @@ func (h *HumanName) MembersSlice(start int, end *int) []string {
 }
 
 func (h *HumanName) Len() int {
-	count := 0
-	for _, v := range h.Members() {
-		if v != "" {
-			count++
+	hasValue := func(items []string) bool {
+		for _, item := range items {
+			if item != "" {
+				return true
+			}
 		}
+		return false
+	}
+
+	count := 0
+	if hasValue(h.titleList) {
+		count++
+	}
+	if hasValue(h.firstList) {
+		count++
+	}
+	if hasValue(h.middleList) {
+		count++
+	}
+	if hasValue(h.lastList) {
+		count++
+	}
+	if hasValue(h.suffixList) {
+		count++
+	}
+	if hasValue(h.nicknameList) {
+		count++
 	}
 	return count
 }
@@ -381,8 +407,27 @@ func (h *HumanName) SetLast(value any) error     { return h.setList("last", valu
 func (h *HumanName) SetSuffix(value any) error   { return h.setList("suffix", value) }
 func (h *HumanName) SetNickname(value any) error { return h.setList("nickname", value) }
 
+func hasInferred(set map[string]struct{}, value string) bool {
+	if len(set) == 0 {
+		return false
+	}
+	_, ok := set[lc(value)]
+	return ok
+}
+
+func addInferred(set *map[string]struct{}, value string) {
+	normalized := lc(value)
+	if normalized == "" {
+		return
+	}
+	if *set == nil {
+		*set = map[string]struct{}{}
+	}
+	(*set)[normalized] = struct{}{}
+}
+
 func (h *HumanName) IsTitle(value string) bool {
-	return h.C.Titles.Contains(value)
+	return hasInferred(h.inferredTitles, value) || h.C.Titles.Contains(value)
 }
 
 func (h *HumanName) IsConjunction(piece any) bool {
@@ -395,7 +440,7 @@ func (h *HumanName) IsConjunction(piece any) bool {
 		}
 		return false
 	case string:
-		return h.C.Conjunctions.Contains(v) && !h.IsAnInitial(v)
+		return (hasInferred(h.inferredConjunction, v) || h.C.Conjunctions.Contains(v)) && !h.IsAnInitial(v)
 	default:
 		return false
 	}
@@ -436,7 +481,7 @@ func (h *HumanName) IsSuffix(piece any) bool {
 	case string:
 		normalized := lc(v)
 		isAcronym := h.C.SuffixAcronyms.Contains(strings.ReplaceAll(normalized, ".", ""))
-		isNotAcronym := h.C.SuffixNotAcronyms.Contains(normalized)
+		isNotAcronym := hasInferred(h.inferredSuffixes, normalized) || h.C.SuffixNotAcronyms.Contains(normalized)
 		return (isAcronym || isNotAcronym) && !h.IsAnInitial(v)
 	default:
 		return false
@@ -453,7 +498,10 @@ func (h *HumanName) AreSuffixes(pieces []string) bool {
 }
 
 func (h *HumanName) IsRootname(piece string) bool {
-	return !h.C.SuffixesPrefixesTitles().Contains(piece) && !h.IsAnInitial(piece)
+	return !h.C.SuffixesPrefixesTitles().Contains(piece) &&
+		!hasInferred(h.inferredTitles, piece) &&
+		!hasInferred(h.inferredSuffixes, piece) &&
+		!h.IsAnInitial(piece)
 }
 
 func (h *HumanName) IsAnInitial(value string) bool {
@@ -541,11 +589,9 @@ func (h *HumanName) squashEmoji() {
 }
 
 func (h *HumanName) handleFirstnames() {
-	if h.Title() != "" && h.Len() == 2 && !h.C.FirstNameTitles.Contains(h.Title()) {
-		first := h.First()
-		last := h.Last()
-		_ = h.SetLast(first)
-		_ = h.SetFirst(last)
+	title := joinSpace(h.titleList)
+	if title != "" && len(h.firstList) > 0 && h.Len() == 2 && !h.C.FirstNameTitles.Contains(title) {
+		h.firstList, h.lastList = h.lastList, h.firstList
 	}
 }
 
@@ -585,6 +631,9 @@ func (h *HumanName) parseFullName() {
 	h.lastList = []string{}
 	h.suffixList = []string{}
 	h.nicknameList = []string{}
+	h.inferredTitles = nil
+	h.inferredConjunction = nil
+	h.inferredSuffixes = nil
 	h.Unparsable = true
 
 	h.preProcess()
@@ -605,12 +654,12 @@ func (h *HumanName) parseFullName() {
 				nxt = pieces[i+1]
 			}
 
-			if h.First() == "" && (hasNext || pLen == 1) && h.IsTitle(piece) {
+			if len(h.firstList) == 0 && (hasNext || pLen == 1) && h.IsTitle(piece) {
 				h.titleList = append(h.titleList, piece)
 				continue
 			}
-			if h.First() == "" {
-				if pLen == 1 && h.Nickname() != "" {
+			if len(h.firstList) == 0 {
+				if pLen == 1 && len(h.nicknameList) > 0 {
 					h.lastList = append(h.lastList, piece)
 					continue
 				}
@@ -632,17 +681,20 @@ func (h *HumanName) parseFullName() {
 			h.middleList = append(h.middleList, piece)
 		}
 	} else {
-		postCommaPieces, _ := h.parsePieces(strings.Split(parts[1], " "), 1)
-		if h.AreSuffixes(strings.Split(parts[1], " ")) && len(strings.Split(parts[0], " ")) > 1 {
+		postCommaSplit := strings.Split(parts[1], " ")
+		firstPartSplit := strings.Split(parts[0], " ")
+
+		postCommaPieces, _ := h.parsePieces(postCommaSplit, 1)
+		if h.AreSuffixes(postCommaSplit) && len(firstPartSplit) > 1 {
 			h.suffixList = append(h.suffixList, parts[1:]...)
-			pieces, _ := h.parsePieces(strings.Split(parts[0], " "), 0)
+			pieces, _ := h.parsePieces(firstPartSplit, 0)
 			for i, piece := range pieces {
 				hasNext := i+1 < len(pieces)
-				if h.First() == "" && (hasNext || len(pieces) == 1) && h.IsTitle(piece) {
+				if len(h.firstList) == 0 && (hasNext || len(pieces) == 1) && h.IsTitle(piece) {
 					h.titleList = append(h.titleList, piece)
 					continue
 				}
-				if h.First() == "" {
+				if len(h.firstList) == 0 {
 					h.firstList = append(h.firstList, piece)
 					continue
 				}
@@ -658,7 +710,7 @@ func (h *HumanName) parseFullName() {
 				h.middleList = append(h.middleList, piece)
 			}
 		} else {
-			lastnamePieces, _ := h.parsePieces(strings.Split(parts[0], " "), 1)
+			lastnamePieces, _ := h.parsePieces(firstPartSplit, 1)
 			for _, piece := range lastnamePieces {
 				if h.IsSuffix(piece) && len(h.lastList) > 0 {
 					h.suffixList = append(h.suffixList, piece)
@@ -669,11 +721,11 @@ func (h *HumanName) parseFullName() {
 
 			for i, piece := range postCommaPieces {
 				hasNext := i+1 < len(postCommaPieces)
-				if h.First() == "" && (hasNext || len(postCommaPieces) == 1) && h.IsTitle(piece) {
+				if len(h.firstList) == 0 && (hasNext || len(postCommaPieces) == 1) && h.IsTitle(piece) {
 					h.titleList = append(h.titleList, piece)
 					continue
 				}
-				if h.First() == "" {
+				if len(h.firstList) == 0 {
 					h.firstList = append(h.firstList, piece)
 					continue
 				}
@@ -689,11 +741,7 @@ func (h *HumanName) parseFullName() {
 		}
 	}
 
-	if h.Len() < 0 {
-		h.Unparsable = true
-	} else {
-		h.Unparsable = false
-	}
+	h.Unparsable = h.Len() == 0
 	h.postProcess()
 }
 
@@ -702,7 +750,11 @@ func (h *HumanName) parsePieces(parts []string, additionalPartsCount int) ([]str
 	for _, part := range parts {
 		chunks := strings.Split(part, " ")
 		for _, chunk := range chunks {
-			output = append(output, strings.Trim(chunk, " ,"))
+			chunk = strings.Trim(chunk, " ,")
+			if chunk == "" {
+				continue
+			}
+			output = append(output, chunk)
 		}
 	}
 
@@ -720,11 +772,11 @@ func (h *HumanName) parsePieces(parts []string, additionalPartsCount int) ([]str
 				}
 			}
 			if len(titles) > 0 {
-				h.C.Titles.Add(part)
+				addInferred(&h.inferredTitles, part)
 				continue
 			}
 			if len(suffixes) > 0 {
-				h.C.SuffixNotAcronyms.Add(part)
+				addInferred(&h.inferredSuffixes, part)
 				continue
 			}
 		}
@@ -762,7 +814,7 @@ func (h *HumanName) joinOnConjunctions(pieces []string, additionalPartsCount int
 			deleteIndex = append(deleteIndex, i)
 		}
 		pieces[r.start] = newPiece
-		h.C.Conjunctions.Add(newPiece)
+		addInferred(&h.inferredConjunction, newPiece)
 	}
 
 	for i := len(deleteIndex) - 1; i >= 0; i-- {
@@ -798,7 +850,7 @@ func (h *HumanName) joinOnConjunctions(pieces []string, additionalPartsCount int
 			}
 			newPiece := strings.Join(pieces[i:i+2], " ")
 			if h.IsTitle(pieces[i+1]) {
-				h.C.Titles.Add(newPiece)
+				addInferred(&h.inferredTitles, newPiece)
 			}
 			pieces[i] = newPiece
 			pieces = append(pieces[:i+1], pieces[i+2:]...)
@@ -815,7 +867,7 @@ func (h *HumanName) joinOnConjunctions(pieces []string, additionalPartsCount int
 			}
 			newPiece := strings.Join(pieces[left:right], " ")
 			if h.IsTitle(pieces[left]) {
-				h.C.Titles.Add(newPiece)
+				addInferred(&h.inferredTitles, newPiece)
 			}
 			pieces[left] = newPiece
 			if i < len(pieces) {
