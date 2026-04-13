@@ -926,7 +926,7 @@ func (h *HumanName) joinOnConjunctions(pieces []string, additionalPartsCount int
 
 		stopAt, hasSuffix := firstMatch(pieces[i+1:], func(s string) bool { return h.IsSuffix(s) })
 		if hasSuffix {
-			j := indexOf(pieces, stopAt, 0)
+			j := indexOf(pieces, stopAt, i+1)
 			newPiece := strings.Join(pieces[i:j], " ")
 			pieces = append(append(copyStrings(pieces[:i]), newPiece), pieces[j:]...)
 			continue

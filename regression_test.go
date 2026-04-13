@@ -29,6 +29,17 @@ func TestNonEmptyDefaultDoesNotBreakParsing(t *testing.T) {
 	}
 }
 
+func TestPrefixWithDuplicateSuffixDoesNotPanic(t *testing.T) {
+	for _, input := range []string{
+		"MD de la Cruz MD",
+		"Jr John de la Cruz Jr",
+		"II de Cruz II",
+	} {
+		h := nameparser.New(input)
+		_ = h.First()
+	}
+}
+
 func TestEmptyNamesAreUnparsable(t *testing.T) {
 	for _, input := range []string{"", "   ", "\t\n"} {
 		h := nameparser.New(input)
