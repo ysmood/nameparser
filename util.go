@@ -2,7 +2,6 @@ package nameparser
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"unicode"
 )
@@ -22,24 +21,6 @@ func copyStrings(items []string) []string {
 	out := make([]string, len(items))
 	copy(out, items)
 	return out
-}
-
-func containsAny(set *StringSet, items []string) bool {
-	for _, item := range items {
-		if set.Contains(item) {
-			return true
-		}
-	}
-	return false
-}
-
-func allInSet(set *StringSet, items []string) bool {
-	for _, item := range items {
-		if !set.Contains(item) {
-			return false
-		}
-	}
-	return true
 }
 
 func indexOf(items []string, value string, start int) int {
@@ -74,12 +55,6 @@ func titleCaseWord(word string) string {
 	}
 	runes[0] = unicode.ToUpper(runes[0])
 	return string(runes)
-}
-
-func sortedValues(set *StringSet) []string {
-	vals := set.Values()
-	sort.Strings(vals)
-	return vals
 }
 
 func sanitizeFormatOutput(s string, emptyDefault string) string {

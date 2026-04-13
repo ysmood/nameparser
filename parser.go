@@ -245,14 +245,14 @@ func (h *HumanName) Len() int {
 }
 
 func (h *HumanName) EqualString(other string) bool {
-	return strings.ToLower(h.String()) == strings.ToLower(other)
+	return strings.EqualFold(h.String(), other)
 }
 
 func (h *HumanName) EqualName(other *HumanName) bool {
 	if other == nil {
 		return false
 	}
-	return strings.ToLower(h.String()) == strings.ToLower(other.String())
+	return strings.EqualFold(h.String(), other.String())
 }
 
 func (h *HumanName) Title() string {
@@ -517,9 +517,7 @@ func (h *HumanName) collapseWhitespace(value string) string {
 	} else {
 		value = strings.TrimSpace(value)
 	}
-	if strings.HasSuffix(value, ",") {
-		value = value[:len(value)-1]
-	}
+	value = strings.TrimSuffix(value, ",")
 	return value
 }
 
